@@ -1,14 +1,21 @@
 package main
 
 import (
+	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"os"
+	"time"
 
+	"github.com/google/uuid"
+	_ "github.com/lib/pq"
 	"github.com/mhiillos/go-blog-aggregator/internal/config"
+	"github.com/mhiillos/go-blog-aggregator/internal/database"
 )
 
 type state struct {
+	db *database.Queries
 	cfg *config.Config
 }
 
@@ -47,21 +54,65 @@ func handlerLogin(s *state, cmd command) error {
 		return errors.New("Please state the username as the argument")
 	}
 	userName := cmd.args[0]
-	err := s.cfg.SetUser(userName)
+	_, err := s.db.GetUser(context.Background(), userName)
+	if err != nil {
+		return fmt.Errorf("User %q does not exist in database", userName)
+	}
+	err = s.cfg.SetUser(userName)
 	if err != nil {
 		return err
 	}
-	fmt.Printf("User %s set.\n", userName)
+	fmt.Printf("User %q set.\n", userName)
+	return nil
+}
+
+// Adds a new user to db
+func handlerRegister(s *state, cmd command) error {
+	if len(cmd.args) != 1 {
+		return errors.New("Please state the username to register")
+	}
+	userName := cmd.args[0]
+	user, err := s.db.CreateUser(context.Background(), database.CreateUserParams{
+		ID: uuid.New(),
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+		Name: userName,
+	})
+	if err != nil {
+		return fmt.Errorf("User with name %q already exists", userName)
+	}
+	err = s.cfg.SetUser(userName)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("User %s created\n", userName)
+	fmt.Println(user)
+	return nil
+}
+
+func handlerReset(s *state, cmd command) error {
+	err := s.db.ResetUsers(context.Background())
+	if err != nil {
+		return fmt.Errorf("Error resetting table: %s", err)
+	}
+	fmt.Println("Users table reset")
 	return nil
 }
 
 func main() {
 	cfg, err := config.Read()
-	s := &state{cfg: &cfg}
 	if err != nil {
 		fmt.Println(err)
 		os.Exit(1)
 	}
+	s := &state{cfg: &cfg}
+	db, err := sql.Open("postgres", cfg.DbURL)
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+	dbQueries := database.New(db)
+	s.db = dbQueries
 
 	// Initalize commands struct
 	cmds := commands{
@@ -70,6 +121,8 @@ func main() {
 
 	// Register commands
 	cmds.register("login", handlerLogin)
+	cmds.register("register", handlerRegister)
+	cmds.register("reset", handlerReset)
 
 	// Read user input
 	args := os.Args
@@ -83,5 +136,6 @@ func main() {
 	err = cmds.run(s, cmd)
 	if err != nil {
 		fmt.Println(err)
+		os.Exit(1)
 	}
 }
