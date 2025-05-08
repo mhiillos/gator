@@ -90,12 +90,30 @@ func handlerRegister(s *state, cmd command) error {
 	return nil
 }
 
+// Resets user table
 func handlerReset(s *state, cmd command) error {
 	err := s.db.ResetUsers(context.Background())
 	if err != nil {
 		return fmt.Errorf("Error resetting table: %s", err)
 	}
 	fmt.Println("Users table reset")
+	return nil
+}
+
+// Prints all the users
+func handlerUsers(s *state, cmd command) error {
+	users, err := s.db.GetUsers(context.Background())
+	if err != nil {
+		return err
+	}
+	currentUser := s.cfg.CurrentUsername
+	for _, user := range users {
+		userStr := fmt.Sprintf("* %s", user.Name)
+		if user.Name == currentUser {
+			userStr += " (current)"
+		}
+		fmt.Printf("%s\n", userStr)
+	}
 	return nil
 }
 
@@ -123,6 +141,7 @@ func main() {
 	cmds.register("login", handlerLogin)
 	cmds.register("register", handlerRegister)
 	cmds.register("reset", handlerReset)
+	cmds.register("users", handlerUsers)
 
 	// Read user input
 	args := os.Args
