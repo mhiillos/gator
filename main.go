@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"encoding/xml"
 	"errors"
 	"fmt"
@@ -194,7 +193,7 @@ func handlerAddfeed(s *state, cmd command) error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("Feed created (%q)", resFeed.ID)
+	fmt.Printf("Feed created (%q)\n", resFeed.ID)
 	// Add FeedFollow for the user
 	resFeedFollow, err := s.db.CreateFeedFollow(context.Background(), database.CreateFeedFollowParams{
 		ID: uuid.New(),
@@ -206,26 +205,25 @@ func handlerAddfeed(s *state, cmd command) error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("Feed follow created (%q)", resFeedFollow.ID)
+	fmt.Printf("Feed follow created (%q)\n", resFeedFollow.ID)
 	return nil
 }
 
 // 
 func handlerAgg(s *state, cmd command) error {
-	url := "https://www.wagslane.dev/index.xml"
-	feed, err := fetchFeed(context.Background(), url)
+	if len(cmd.args) != 1 {
+		return errors.New("Please provide time between requests as a duration string")
+	}
+	timeBetweenRequests, err := time.ParseDuration(cmd.args[0])
 	if err != nil {
-		return err
+		return errors.New("Please provide a valid duration string")
 	}
-	if feed == nil {
-		return errors.New("feed is nil")
+
+	fmt.Printf("Collecting feeds every %s\n", timeBetweenRequests)
+	ticker := time.NewTicker(timeBetweenRequests)
+	for ; ; <- ticker.C {
+		scrapeFeeds(s)
 	}
-	jsonData, err := json.MarshalIndent(feed, "", "  ")
-	if err != nil {
-		return fmt.Errorf("error mashaling feed to JSON: %w", err)
-	}
-	fmt.Println(string(jsonData))
-	return nil
 }
 
 // Prints all the feeds
@@ -279,6 +277,46 @@ func handlerFollowing(s *state, cmd command) error {
 	return nil
 }
 
+func handlerUnfollow(s *state, cmd command) error {
+	if len(cmd.args) != 1 {
+		return errors.New("Please provide the feed URL to unfollow")
+	}
+	user, _ := s.db.GetUser(context.Background(), s.cfg.CurrentUsername)
+
+	feed, err := s.db.GetFeedByUrl(context.Background(), cmd.args[0])
+	if err != nil {
+		return fmt.Errorf("Feed %q not found", cmd.args[0])
+	}
+	err = s.db.DeleteFeedFollow(context.Background(), database.DeleteFeedFollowParams{UserID: user.ID, FeedID: feed.ID})
+	if err != nil {
+		return fmt.Errorf("Removing follow failed: %w", err)
+	}
+	fmt.Printf("User %q unfollowed %q", user.Name, feed.Name)
+	return nil
+}
+
+// Aggregation function to scrape feeds
+func scrapeFeeds(s* state) error {
+	feed, err := s.db.GetNextFeedToFetch(context.Background())
+	if err != nil {
+		return err
+	}
+	// Mark the feed as fetched
+	err = s.db.MarkFeedFetched(context.Background(), feed.ID)
+	if err != nil {
+		return err
+	}
+	feedData, err := fetchFeed(context.Background(), feed.Url)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("RSS Titles for %s:\n", feed.Name)
+	for _, item := range feedData.Channel.Item {
+		fmt.Printf("%s\n", item.Title)
+	}
+	return nil
+}
+
 func main() {
 	cfg, err := config.Read()
 	if err != nil {
@@ -309,6 +347,7 @@ func main() {
 	cmds.register("feeds", handlerFeeds)
 	cmds.register("follow", handlerFollow)
 	cmds.register("following", handlerFollowing)
+	cmds.register("unfollow", handlerUnfollow)
 
 	// Read user input
 	args := os.Args
