@@ -1,4 +1,4 @@
-module github.com/mhiillos/go-blog-aggregator
+module github.com/mhiillos/gator
 
 go 1.24.2
 

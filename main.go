@@ -10,12 +10,14 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	_ "github.com/lib/pq"
-	"github.com/mhiillos/go-blog-aggregator/internal/config"
-	"github.com/mhiillos/go-blog-aggregator/internal/database"
+	"github.com/mhiillos/gator/internal/config"
+	"github.com/mhiillos/gator/internal/database"
 )
 
 type state struct {
@@ -306,13 +308,89 @@ func scrapeFeeds(s* state) error {
 	if err != nil {
 		return err
 	}
+	fmt.Printf("Scraping %s...\n", feed.Url)
 	feedData, err := fetchFeed(context.Background(), feed.Url)
 	if err != nil {
 		return err
 	}
-	fmt.Printf("RSS Titles for %s:\n", feed.Name)
-	for _, item := range feedData.Channel.Item {
-		fmt.Printf("%s\n", item.Title)
+	
+	// Save the feeds to the database
+	for _, post := range(feedData.Channel.Item) {
+		publishedAt, err := parseTime(post.PubDate)
+		if err != nil {
+			return err
+		}
+		res, err := s.db.CreatePost(context.Background(), database.CreatePostParams{
+			ID: uuid.New(),
+			CreatedAt: time.Now(),
+			UpdatedAt: time.Now(),
+			Title: post.Title,
+			Url: post.Link,
+			Description: sql.NullString{
+				String: post.Description,
+				Valid: post.Description != "",
+			},
+			PublishedAt: publishedAt,
+			FeedID: feed.ID,
+		})
+		if err != nil {
+			// Ignore errors from duplicate URLs
+			if strings.Contains(err.Error(), "UNIQUE constraint failed: posts.url") || strings.Contains(err.Error(), "duplicate key value violates unique constraint \"posts_url_key\"") {
+				continue
+			}
+			// Otherwise, log the error but keep processing
+			fmt.Printf("Error creating post: %v", err)
+			continue
+		}
+		fmt.Printf("Saved feed with title %s\n", res.Title)
+	}
+
+	return nil
+}
+
+func parseTime(timeStr string) (time.Time, error) {
+	timeFormats := []string {
+		time.RFC1123Z,
+		time.RFC1123,
+		time.RFC3339,
+		"2006-01-02 15:04:05",
+		"Mon Jan 2 15:04:05 -0700 MST 2006",
+	}
+	t := time.Time{}
+	for _, format := range timeFormats {
+		t, err := time.Parse(format, timeStr)
+		if err == nil {
+			return t, nil
+		}
+	}
+	return t, fmt.Errorf("Could not parse time: %s", timeStr)
+}
+
+func handlerBrowse(s *state, cmd command) error {
+	limit := 2
+	if len(cmd.args) >= 1 {
+		num, err := strconv.Atoi(cmd.args[0])
+		if err != nil {
+			return errors.New("Argument is not a number")
+		}
+		limit = num
+	}
+	user, err := s.db.GetUser(context.Background(), s.cfg.CurrentUsername)
+	if err != nil {
+		return fmt.Errorf("Error getting user %q from database", s.cfg.CurrentUsername)
+	}
+	userId := user.ID
+	posts, err := s.db.GetPostsForUser(context.Background(), database.GetPostsForUserParams{ UserID: userId, Limit: int32(limit) })
+	if err != nil {
+		return fmt.Errorf("Error getting posts for user %q from database: %w", s.cfg.CurrentUsername, err)
+	}
+	fmt.Printf("Browsing %d posts for user %s:\n", limit, s.cfg.CurrentUsername)
+	for _, post := range posts {
+		description := "N/A"
+		if post.Description.Valid {
+			description = post.Description.String
+		}
+		fmt.Printf("Title: %s\nDescription: %s\nPublishedAt: %s\n\n", post.Title, description, post.PublishedAt)
 	}
 	return nil
 }
@@ -348,6 +426,7 @@ func main() {
 	cmds.register("follow", handlerFollow)
 	cmds.register("following", handlerFollowing)
 	cmds.register("unfollow", handlerUnfollow)
+	cmds.register("browse", handlerBrowse)
 
 	// Read user input
 	args := os.Args
