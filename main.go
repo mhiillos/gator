@@ -431,7 +431,7 @@ func main() {
 	// Read user input
 	args := os.Args
 	if len(args) < 2 {
-		fmt.Print("No arguments provided.\nUsage:\n  go run . <command> [args]\n")
+		fmt.Print("No arguments provided.\nUsage:\n  gator <command> [args]\n")
 		os.Exit(1)
 	}
 	cmdName := args[1]
